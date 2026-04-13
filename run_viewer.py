@@ -42,6 +42,9 @@ class ViewerState:
     curve_registered: set = field(default_factory=set)
     last_t: float | None = None
     reload_requested: bool = False
+    # Per-structure: subtract vertex mean (centroid) each frame, then add i * x_offset on x.
+    lock_center: bool = False
+    x_offset: float = 0.0
 
 
 def _color_kw(spec: dict) -> dict:
@@ -53,12 +56,25 @@ def _color_kw(spec: dict) -> dict:
     return {"color": (float(c[0]), float(c[1]), float(c[2]))}
 
 
+def _transform_vertices(state: ViewerState, verts: np.ndarray, structure_index: int) -> np.ndarray:
+    """Apply center-lock and/or per-structure x spacing (i × offset); copy only if needed."""
+    dx = float(structure_index) * state.x_offset
+    if not state.lock_center and dx == 0.0:
+        return np.ascontiguousarray(verts, dtype=np.float64)
+    out = np.ascontiguousarray(verts, dtype=np.float64).copy()
+    if state.lock_center:
+        out -= out.mean(axis=0)
+    if dx != 0.0:
+        out[:, 0] += dx
+    return out
+
+
 def update_structures_for_frame(state: ViewerState) -> None:
     t = state.frame_idx
-    for spec in state.specs:
+    for i, spec in enumerate(state.specs):
         st = spec["structure_type"]
         name = spec["name"]
-        verts = np.ascontiguousarray(spec["vertices"][t], dtype=np.float64)
+        verts = _transform_vertices(state, spec["vertices"][t], i)
         ck = _color_kw(spec)
 
         if st == STRUCTURE_SURFACE_MESH:
@@ -101,7 +117,7 @@ def reload_pickle(state: ViewerState) -> None:
 
 
 # Bottom bar height (fixed; avoids ImVec2 from GetIO().DisplaySize in bindings).
-_PLAYBACK_PANEL_HEIGHT = 132.0
+_PLAYBACK_PANEL_HEIGHT = 200.0
 
 
 def build_user_callback(state: ViewerState):
@@ -155,6 +171,18 @@ def build_user_callback(state: ViewerState):
             0.05,
             1.0,
             format="%.2f",
+        )
+        imgui.PopItemWidth()
+
+        _, state.lock_center = imgui.Checkbox("Center each structure at origin", state.lock_center)
+        imgui.Text("X spacing (structure i gets i × value)")
+        imgui.PushItemWidth(220.0)
+        _, state.x_offset = imgui.SliderFloat(
+            "##x_offset",
+            state.x_offset,
+            -2.0,
+            2.0,
+            format="%.3f",
         )
         imgui.PopItemWidth()
 
