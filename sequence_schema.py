@@ -13,12 +13,14 @@ structure_type : str
 name : str
     Stable identifier, unique among structures of the same ``structure_type``.
 vertices : numpy.ndarray, float, shape (T, V, 3)
-    Time-varying 3D positions. **T must match every other structure.**
+    Time-varying 3D positions. **T must match every other structure.** All values must be
+    **finite** (no ``nan``, no ``inf``); non-finite coordinates are invalid for the viewer.
 
 surface_mesh extras
 -------------------
 faces : numpy.ndarray, integer, shape (F, 3)
-    Triangle vertex indices for each frame (same topology for all t).
+    Triangle vertex indices for each frame (same topology for all t). Mesh geometry uses
+    ``vertices`` only; those positions must be finite (no NaN or infinity).
 
 curve_network extras
 --------------------
@@ -34,8 +36,9 @@ color : numpy.ndarray, shape (3,)
 Validation
 ----------
 The viewer checks: non-empty list, required keys per type, ``vertices.ndim == 3``,
-shared T, integer-like faces/edges with plausible shapes, name uniqueness per type,
-and optional ``color`` shape ``(3,)`` (integer or float).
+that **all vertex coordinates are finite** (no NaN or infinity), shared T, integer-like
+faces/edges with plausible shapes, name uniqueness per type, and optional ``color`` shape
+``(3,)`` (integer or float).
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ def validate_sequences(specs: list) -> int:
     Raises
     ------
     TypeError, ValueError
-        If the structure is invalid.
+        If the structure is invalid (including non-finite ``vertices``).
     """
     if not isinstance(specs, list):
         raise TypeError(f"Expected a list of structure specs, got {type(specs).__name__}")
@@ -102,6 +105,10 @@ def validate_sequences(specs: list) -> int:
             )
         if not np.issubdtype(v.dtype, np.floating):
             raise ValueError(f"Item {i} ({name}): 'vertices' must be floating dtype")
+        if not np.isfinite(v).all():
+            raise ValueError(
+                f"Item {i} ({name}): 'vertices' must be finite (no nan or inf)"
+            )
 
         t, _v, _ = v.shape
         if t0 is None:

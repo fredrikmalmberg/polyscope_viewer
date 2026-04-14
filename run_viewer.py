@@ -2,9 +2,7 @@
 Load a sequence pickle and play it in Polyscope using a frame_tick loop.
 
 Usage:
-    python run_viewer.py [path/to/sequences.pkl]
-
-Default pickle path is ./example_data.pkl next to this file.
+    python run_viewer.py path/to/sequences.pkl
 """
 
 from __future__ import annotations
@@ -212,20 +210,27 @@ def run_loop(state: ViewerState) -> None:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.abspath(__file__))
-    default_pkl = os.path.join(here, "example_data.pkl")
-
     p = argparse.ArgumentParser(description="View Polyscope sequence pickles.")
     p.add_argument(
         "pickle_path",
-        nargs="?",
-        default=default_pkl,
-        help=f"path to pickle (default: {default_pkl})",
+        help="path to the sequence pickle file",
     )
     args = p.parse_args()
 
-    with open(args.pickle_path, "rb") as f:
-        specs = pickle.load(f)
+    try:
+        with open(args.pickle_path, "rb") as f:
+            specs = pickle.load(f)
+    except ModuleNotFoundError as e:
+        err = str(e).lower()
+        if "numpy" in err or "_core" in err:
+            raise SystemExit(
+                "Pickle failed to load: NumPy version mismatch.\n"
+                "Files saved with NumPy 2.x need NumPy 2.0+ to unpickle "
+                "(e.g. pip install 'numpy>=2' in this env).\n"
+                "Alternatively, re-save the pickle using the same NumPy as the viewer.\n"
+                f"Original error: {e}"
+            ) from e
+        raise
 
     t_frames = validate_sequences(specs)
 
