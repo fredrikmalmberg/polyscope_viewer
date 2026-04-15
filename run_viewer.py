@@ -1,6 +1,9 @@
 """
 Load a sequence pickle and play it in Polyscope using a frame_tick loop.
 
+Requires: numpy, polyscope. ``structure_type`` ``data`` entries are shown as full-width
+ImGui ``PlotLines`` strips stacked above the transport controls (no extra dependencies).
+
 Usage:
     python run_viewer.py path/to/sequences.pkl
 """
@@ -19,6 +22,7 @@ import polyscope.imgui as imgui
 
 from sequence_schema import (
     STRUCTURE_CURVE_NETWORK,
+    STRUCTURE_DATA,
     STRUCTURE_SURFACE_MESH,
     validate_sequences,
 )
@@ -54,6 +58,16 @@ def _color_kw(spec: dict) -> dict:
     return {"color": (float(c[0]), float(c[1]), float(c[2]))}
 
 
+def _data_series_1d(spec: dict) -> np.ndarray:
+    """Single time series per DATA spec: 1D ``values`` or first column if ``(T, K)``."""
+    val = np.asarray(spec["values"], dtype=np.float64)
+    if val.ndim == 1:
+        return val
+    if val.ndim == 2 and val.shape[1] >= 1:
+        return val[:, 0]
+    raise ValueError("data values must be (T,) or (T, K)")
+
+
 def _transform_vertices(state: ViewerState, verts: np.ndarray, structure_index: int) -> np.ndarray:
     """Apply center-lock and/or per-structure x spacing (i × offset); copy only if needed."""
     dx = float(structure_index) * state.x_offset
@@ -69,10 +83,14 @@ def _transform_vertices(state: ViewerState, verts: np.ndarray, structure_index: 
 
 def update_structures_for_frame(state: ViewerState) -> None:
     t = state.frame_idx
-    for i, spec in enumerate(state.specs):
+    geom_i = 0
+    for spec in state.specs:
         st = spec["structure_type"]
+        if st == STRUCTURE_DATA:
+            continue
         name = spec["name"]
-        verts = _transform_vertices(state, spec["vertices"][t], i)
+        verts = _transform_vertices(state, spec["vertices"][t], geom_i)
+        geom_i += 1
         ck = _color_kw(spec)
 
         if st == STRUCTURE_SURFACE_MESH:
@@ -114,30 +132,68 @@ def reload_pickle(state: ViewerState) -> None:
     state.frame_accum = 0.0
 
 
-# Bottom bar height (fixed; avoids ImVec2 from GetIO().DisplaySize in bindings).
+# Transport controls height (fixed; avoids ImVec2 from GetIO().DisplaySize in bindings).
 _PLAYBACK_PANEL_HEIGHT = 200.0
+# Thin sparkline per ``data`` entry (numpy → PlotLines), same content width as sliders.
+_SPARKLINE_H = 28.0
+_SPARKLINE_GAP = 3.0
 
 
 def build_user_callback(state: ViewerState):
     def callback():
         win_w, win_h = ps.get_window_size()
-        h = min(_PLAYBACK_PANEL_HEIGHT, float(win_h))
-        imgui.SetNextWindowPos(
-            (0.0, float(win_h) - h),
-            imgui.ImGuiCond_Always,
+        win_w = max(float(win_w), 64.0)
+        win_h = max(float(win_h), 64.0)
+
+        data_specs = [
+            s for s in state.specs if s.get("structure_type") == STRUCTURE_DATA
+        ]
+        n_data = len(data_specs)
+        strip_h = (
+            float(n_data) * (_SPARKLINE_H + _SPARKLINE_GAP) + 8.0 if n_data else 0.0
         )
-        imgui.SetNextWindowSize(
-            (float(win_w), h),
-            imgui.ImGuiCond_Always,
-        )
-        flags = (
+        h_play = min(_PLAYBACK_PANEL_HEIGHT, win_h * 0.5)
+        total_h = h_play + strip_h
+
+        dock_flags = (
             imgui.ImGuiWindowFlags_NoTitleBar
             | imgui.ImGuiWindowFlags_NoResize
             | imgui.ImGuiWindowFlags_NoMove
             | imgui.ImGuiWindowFlags_NoCollapse
-            | imgui.ImGuiWindowFlags_NoScrollbar
         )
+
+        imgui.SetNextWindowPos(
+            (0.0, max(0.0, float(win_h) - total_h)),
+            imgui.ImGuiCond_Always,
+        )
+        imgui.SetNextWindowSize((win_w, min(total_h, win_h)), imgui.ImGuiCond_Always)
+        flags = dock_flags | imgui.ImGuiWindowFlags_NoScrollbar
         imgui.Begin("Sequence playback", True, flags)
+
+        if n_data > 0:
+            for di, spec in enumerate(data_specs):
+                series_arr = _data_series_1d(spec)
+                series = series_arr.tolist()
+                vmin, vmax = float(np.min(series_arr)), float(np.max(series_arr))
+                if vmin == vmax:
+                    vmin -= 1.0
+                    vmax += 1.0
+                avail_w, _ = imgui.GetContentRegionAvail()
+                graph_w = max(avail_w, 32.0)
+                imgui.PushItemWidth(-1.0)
+                imgui.PlotLines(
+                    f"##data_spark_{di}",
+                    series,
+                    0,
+                    None,
+                    vmin,
+                    vmax,
+                    (graph_w, _SPARKLINE_H),
+                )
+                imgui.PopItemWidth()
+                if di < n_data - 1:
+                    imgui.Dummy((0.0, _SPARKLINE_GAP))
+            imgui.Separator()
 
         tmax = max(0, state.t_frames - 1)
         imgui.Text(f"Frame {state.frame_idx + 1} / {state.t_frames}")
